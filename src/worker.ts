@@ -1,108 +1,165 @@
-interface Env {}
+// src/worker.ts
 
-async function fetch_json(url: string): Promise<any> {
-  const response = await fetch(url, {
-    method: "GET",
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-      "Content-Type": "application/json"
-    }
+type ProblemItem = {
+  type: string;
+  difficulty: string | number;
+};
+
+type ProblemStats = {
+  difficultyType: Record<string, Record<string, number>>;
+  typeDifficulty: Record<string, Record<string, number>>;
+  count: number;
+};
+
+const TYPE_LIST = ['ALL', 'P', 'B', 'CF', 'SP', 'AT', 'UVA'] as const;
+const DIFFICULTY_LIST = ['ALL', '0', '1', '2', '3', '4', '5', '6', '7'] as const;
+
+function jsonResponse(data: unknown, status = 200): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { 'content-type': 'application/json; charset=utf-8' },
   });
-  return await response.json();
 }
 
-function fetch_problem(problem_list: any[]): any {
-  const type_list = ['ALL', 'P', 'B', 'CF', 'SP', 'AT', 'UVA'];
-  const difficulty_list = ['ALL', '0', '1', '2', '3', '4', '5', '6', '7'];
+async function fetchJson(url: string): Promise<any> {
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+      'Content-Type': 'application/json',
+    },
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+function fetchProblem(problemList: ProblemItem[]): ProblemStats {
   const difficultyType: Record<string, Record<string, number>> = {};
-  for (const d of difficulty_list) {
-    if (d !== 'ALL') {
-      difficultyType[d] = {};
-      for (const t of type_list) {
-        difficultyType[d][t] = 0;
-      }
-    }
-  }
   const typeDifficulty: Record<string, Record<string, number>> = {};
-  for (const t of type_list) {
-    if (t !== 'ALL') {
-      typeDifficulty[t] = {};
-      for (const d of difficulty_list) {
-        typeDifficulty[t][d] = 0;
-      }
+
+  // 初始化 difficultyType（不含 ALL）
+  for (const d of DIFFICULTY_LIST) {
+    if (d !== 'ALL') {
+      difficultyType[d] = Object.fromEntries(TYPE_LIST.map((t) => [t, 0])) as Record<string, number>;
     }
   }
-  for (const problem of problem_list) {
-    const mtype = problem['type'];
-    const difficulty = String(problem['difficulty']);
-    difficultyType[difficulty][mtype] += 1;
-    typeDifficulty[mtype][difficulty] += 1;
+  // 初始化 typeDifficulty（不含 ALL）
+  for (const t of TYPE_LIST) {
+    if (t !== 'ALL') {
+      typeDifficulty[t] = Object.fromEntries(DIFFICULTY_LIST.map((d) => [d, 0])) as Record<string, number>;
+    }
+  }
+
+  for (const problem of problemList ?? []) {
+    const mtype = String(problem.type);
+    const difficulty = String(problem.difficulty);
+
+    if (!difficultyType[difficulty]) {
+      difficultyType[difficulty] = Object.fromEntries(TYPE_LIST.map((t) => [t, 0])) as Record<string, number>;
+    }
+    if (!typeDifficulty[mtype]) {
+      typeDifficulty[mtype] = Object.fromEntries(DIFFICULTY_LIST.map((d) => [d, 0])) as Record<string, number>;
+    }
+
+    if (difficultyType[difficulty]['ALL'] === undefined) difficultyType[difficulty]['ALL'] = 0;
+    if (typeDifficulty[mtype]['ALL'] === undefined) typeDifficulty[mtype]['ALL'] = 0;
+
+    difficultyType[difficulty][mtype] = (difficultyType[difficulty][mtype] ?? 0) + 1;
+    typeDifficulty[mtype][difficulty] = (typeDifficulty[mtype][difficulty] ?? 0) + 1;
+
     difficultyType[difficulty]['ALL'] += 1;
     typeDifficulty[mtype]['ALL'] += 1;
   }
+
   return {
-    'difficultyType': difficultyType,
-    'typeDifficulty': typeDifficulty,
-    'count': problem_list.length
+    difficultyType,
+    typeDifficulty,
+    count: problemList?.length ?? 0,
   };
 }
 
-async function fetch_user_data(uid: string, base_url: string = 'https://www.luogu.com.cn'): Promise<any> {
-  const data = await fetch_json(`${base_url}/user/${uid}?_contentOnly=1`);
-  let user = structuredClone(data['currentData']['user']);
-  const del_list = [
-    'passedProblemCount', 'submittedProblemCount', 'elo', 'eloValue', 'badge', 'slogan', 'avatar',
-    'isRoot', 'blogAddress', 'prize', 'background', 'introduction', 'uid', 'name'
+async function fetchUserData(uid: string, baseUrl = 'https://www.luogu.com.cn') {
+  const data = await fetchJson(`${baseUrl}/user/${encodeURIComponent(uid)}?_contentOnly=1`);
+  const srcUser = data?.currentData?.user ?? {};
+
+  // 深拷贝用户对象
+  const user = JSON.parse(JSON.stringify(srcUser));
+
+  const delList = [
+    'passedProblemCount',
+    'submittedProblemCount',
+    'elo',
+    'eloValue',
+    'badge',
+    'slogan',
+    'avatar',
+    'isRoot',
+    'blogAddress',
+    'prize',
+    'background',
+    'introduction',
+    'uid',
+    'name',
   ];
-  for (const key of del_list) {
-    if (key in user) {
-      delete user[key];
-    }
+
+  for (const key of delList) {
+    if (key in user) delete user[key];
   }
-  const rdata = {
-    'info': {
-      'uid': uid,
-      'name': data['currentData']['user']['name'],
-      'avatar': data['currentData']['user']['avatar'],
-      'slogan': data['currentData']['user']['slogan'],
-      'badge': data['currentData']['user']['badge'],
+
+  const rdata: any = {
+    info: {
+      uid,
+      name: data?.currentData?.user?.name,
+      avatar: data?.currentData?.user?.avatar,
+      slogan: data?.currentData?.user?.slogan,
+      badge: data?.currentData?.user?.badge,
     },
-    'user': user,
-    'elo': data['currentData']['eloMax']
+    user,
+    elo: data?.currentData?.eloMax,
   };
-  if ('passedProblems' in data['currentData']) {
-    rdata['passedProblem'] = fetch_problem(data['currentData']['passedProblems']);
+
+  if ('passedProblems' in (data?.currentData ?? {})) {
+    rdata.passedProblem = fetchProblem(data.currentData.passedProblems);
   } else {
-    rdata['passedProblem'] = null;
+    rdata.passedProblem = null;
   }
-  if ('submittedProblems' in data['currentData']) {
-    rdata['submittedProblem'] = fetch_problem(data['currentData']['submittedProblems']);
+
+  if ('submittedProblems' in (data?.currentData ?? {})) {
+    rdata.submittedProblem = fetchProblem(data.currentData.submittedProblems);
   } else {
-    rdata['submittedProblem'] = null;
+    rdata.submittedProblem = null;
   }
+
   return rdata;
 }
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
-    const searchParams = url.searchParams;
-    const uid = searchParams.get("uid");
+
+    if (url.pathname === '/favicon.ico') {
+      return new Response('');
+    }
+
+    const uid = url.searchParams.get('uid');
     if (uid) {
       console.log(`Fetching data for user ${uid}...`);
-      let base_url = 'https://www.luogu.com';
-      if (searchParams.get("cn") === 'true') {
-        base_url = 'https://www.luogu.com.cn';
+      // 与原 worker.py 保持一致的默认域名逻辑
+      const baseUrl = url.searchParams.get('cn') === 'true' ? 'https://www.luogu.com.cn' : 'https://www.luogu.com';
+
+      try {
+        const data = await fetchUserData(uid, baseUrl);
+        console.log(`Data for user ${uid} fetched successfully.`);
+        return jsonResponse(data);
+      } catch (err) {
+        console.error(`Failed to fetch data for user ${uid}`, err);
+        return jsonResponse({ error: 'Failed to fetch user data' }, 500);
       }
-      const data = await fetch_user_data(uid, base_url);
-      console.log(`Data for user ${uid} fetched successfully.`);
-      return new Response(JSON.stringify(data), {
-        headers: { 'Content-Type': 'application/json' }
-      });
     }
-    if (url.pathname === "/favicon.ico") {
-      return new Response("");
-    }
-    return new Response("Hello world!");
+
+    return new Response('Hello world!');
   },
 };
