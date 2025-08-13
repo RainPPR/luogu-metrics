@@ -54,6 +54,12 @@ function snippet(s: string, max = 600): string {
   return s.length > max ? s.slice(0, max) + ` ...[+${s.length - max} chars]` : s;
 }
 
+function randHex(nBytes = 16): string {
+  const buf = new Uint8Array(nBytes);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 function fetchProblem(problemList: ProblemItem[] = []): ProblemStats {
   const difficultyType: Record<string, Record<string, number>> = {};
   const typeDifficulty: Record<string, Record<string, number>> = {};
@@ -97,80 +103,20 @@ function fetchProblem(problemList: ProblemItem[] = []): ProblemStats {
   };
 }
 
-type FetchDebugMeta = {
+type AttemptMeta = {
+  type: 'contentOnly' | 'html';
   url: string;
   status: number;
   ok: boolean;
   redirected: boolean;
   contentType: string | null;
   bodyPreview: string;
+  note?: string;
+  code?: number;
+  errorType?: string;
+  errorMessage?: string;
+  domain: string;
 };
-
-async function fetchJsonWithDebug(url: string): Promise<{ data: any; meta: FetchDebugMeta }> {
-  const headers: Record<string, string> = {
-    // 尽量模拟浏览器请求，提升兼容性
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache',
-    'X-Requested-With': 'XMLHttpRequest',
-    'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-    'Content-Type': 'application/json',
-  };
-
-  // 设置合理的 Referer/Origin
-  try {
-    const u = new URL(url);
-    headers['Origin'] = `${u.protocol}//${u.host}`;
-    headers['Referer'] = `${u.protocol}//${u.host}/`;
-  } catch {
-    // ignore
-  }
-
-  console.log('[fetchJson] ->', url, 'headers:', headers);
-
-  const res = await fetch(url, {
-    method: 'GET',
-    headers,
-    // cf: { cacheEverything: false }, // 如需 Cloudflare 边缘缓存可开启
-  });
-
-  const ct = res.headers.get('content-type');
-  const preview = await res.clone().text().then((t) => snippet(t)).catch(() => '[body read error]');
-  const meta: FetchDebugMeta = {
-    url,
-    status: res.status,
-    ok: res.ok,
-    redirected: res.redirected,
-    contentType: ct,
-    bodyPreview: preview,
-  };
-
-  console.log('[fetchJson] <- status:', res.status, 'ct:', ct, 'redirected:', res.redirected);
-  console.log('[fetchJson] body preview:', preview);
-
-  let data: any = null;
-  try {
-    // 有些站点会用 text/html 返回 JSON，这里做双重兜底
-    if (ct && ct.includes('application/json')) {
-      data = await res.json();
-    } else {
-      const txt = await res.text();
-      try {
-        data = JSON.parse(txt);
-      } catch {
-        data = null;
-      }
-    }
-  } catch (e) {
-    console.error('[fetchJson] parse json failed:', (e as Error).message);
-    data = null;
-  }
-
-  return { data, meta };
-}
 
 function isValidLuoguPayload(data: any): boolean {
   return !!(data && data.currentData && data.currentData.user);
@@ -218,16 +164,32 @@ function buildUserResult(data: any, uid: string) {
     submittedProblem: null as ProblemStats | null,
   };
 
-  if (data?.currentData && 'passedProblems' in data.currentData) {
-    console.log('[buildUserResult] passedProblems length:', data.currentData.passedProblems?.length ?? 0);
+  if (data?.currentData && Array.isArray(data.currentData.passedProblems)) {
+    console.log('[buildUserResult] passedProblems length:', data.currentData.passedProblems.length);
     rdata.passedProblem = fetchProblem(data.currentData.passedProblems as ProblemItem[]);
+  } else if (data?.currentData && 'passedProblems' in data.currentData) {
+    console.log('[buildUserResult] passedProblems present but not array, type:', typeof data.currentData.passedProblems);
+    try {
+      const arr = Array.from(data.currentData.passedProblems || []);
+      rdata.passedProblem = fetchProblem(arr as ProblemItem[]);
+    } catch {
+      rdata.passedProblem = null;
+    }
   } else {
     console.log('[buildUserResult] passedProblems not present');
   }
 
-  if (data?.currentData && 'submittedProblems' in data.currentData) {
-    console.log('[buildUserResult] submittedProblems length:', data.currentData.submittedProblems?.length ?? 0);
+  if (data?.currentData && Array.isArray(data.currentData.submittedProblems)) {
+    console.log('[buildUserResult] submittedProblems length:', data.currentData.submittedProblems.length);
     rdata.submittedProblem = fetchProblem(data.currentData.submittedProblems as ProblemItem[]);
+  } else if (data?.currentData && 'submittedProblems' in data.currentData) {
+    console.log('[buildUserResult] submittedProblems present but not array, type:', typeof data.currentData.submittedProblems);
+    try {
+      const arr = Array.from(data.currentData.submittedProblems || []);
+      rdata.submittedProblem = fetchProblem(arr as ProblemItem[]);
+    } catch {
+      rdata.submittedProblem = null;
+    }
   } else {
     console.log('[buildUserResult] submittedProblems not present');
   }
@@ -235,49 +197,209 @@ function buildUserResult(data: any, uid: string) {
   return rdata;
 }
 
-async function fetchUserDataOnce(uid: string, baseUrl: string) {
-  const url = `${baseUrl.replace(/\/+$/, '')}/user/${encodeURIComponent(uid)}?_contentOnly=1`;
-  const started = Date.now();
-  const { data, meta } = await fetchJsonWithDebug(url);
-  console.log('[fetchUserDataOnce] ms:', Date.now() - started, 'valid:', isValidLuoguPayload(data));
-  return { data, meta, baseUrl };
+function createLuoguHeaders(baseUrl: string, uid: string, kind: 'json' | 'html', clientId: string): HeadersInit {
+  const headers: Record<string, string> = {
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+    'Referer': `${baseUrl}/user/${encodeURIComponent(uid)}`,
+    'Origin': baseUrl,
+    // 某些平台禁止覆盖 UA；尽量设置，但即使被忽略也无碍。
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
+      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    // 很多情况下 __client_id 必须存在，否则返回 418
+    'Cookie': `__client_id=${clientId};`,
+    // 这些头可以帮助模拟浏览器环境
+    'Sec-Fetch-Site': 'same-origin',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Dest': 'empty',
+  };
+
+  if (kind === 'json') {
+    headers['Accept'] = 'application/json, text/plain, */*';
+    headers['X-Requested-With'] = 'XMLHttpRequest';
+    headers['x-luogu-type'] = 'content-only';
+    // 不要为 GET 人为设置 Content-Type
+  } else {
+    headers['Accept'] = 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8';
+  }
+
+  return headers;
 }
 
-async function fetchUserDataSmart(uid: string, preferredBaseUrl: string) {
-  // 先按首选域名请求，若无效则切换另一个域名再试
-  const first = await fetchUserDataOnce(uid, preferredBaseUrl);
+async function doFetch(url: string, init: RequestInit, reqId: string): Promise<{ res: Response; preview: string; contentType: string | null }> {
+  console.log(`[${reqId}] fetch ->`, url, 'init.headers:', init.headers);
+  const res = await fetch(url, init);
+  const contentType = res.headers.get('content-type');
+  const preview = await res.clone().text().then((t) => snippet(t)).catch(() => '[body read error]');
+  console.log(`[${reqId}] fetch <- status=${res.status} ok=${res.ok} ct=${contentType} redirected=${res.redirected}`);
+  console.log(`[${reqId}] body preview:`, preview);
+  return { res, preview, contentType };
+}
 
-  if (isValidLuoguPayload(first.data)) {
-    console.log('[fetchUserDataSmart] first attempt succeeded on', first.baseUrl);
-    return { data: first.data, trace: [first.meta] };
+async function fetchContentOnly(baseUrl: string, uid: string, reqId: string): Promise<{ data: any | null; meta: AttemptMeta }> {
+  const clientId = randHex(16); // 32 hex chars
+  const url = `${baseUrl.replace(/\/+$/, '')}/user/${encodeURIComponent(uid)}?_contentOnly=1`;
+
+  const headers = createLuoguHeaders(baseUrl, uid, 'json', clientId);
+  // 控制台打印 Cookie（调试用），响应中不回显
+  console.log(`[${reqId}] [contentOnly] using cookie:`, headers['Cookie']);
+
+  const { res, preview, contentType } = await doFetch(url, { method: 'GET', headers }, reqId);
+
+  let data: any = null;
+  try {
+    if (contentType && contentType.includes('application/json')) {
+      data = await res.json();
+    } else {
+      // 有的场景会返回 text/html 包 JSON
+      const text = await res.text();
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+    }
+  } catch (e) {
+    console.error(`[${reqId}] [contentOnly] JSON parse error:`, (e as Error).message);
   }
 
-  const altBaseUrl =
-    preferredBaseUrl.includes('.com.cn') || preferredBaseUrl.endsWith('.cn')
-      ? 'https://www.luogu.com'
-      : 'https://www.luogu.com.cn';
+  const meta: AttemptMeta = {
+    type: 'contentOnly',
+    url,
+    status: res.status,
+    ok: res.ok,
+    redirected: res.redirected,
+    contentType,
+    bodyPreview: preview,
+    domain: new URL(baseUrl).host,
+  };
 
-  console.warn('[fetchUserDataSmart] first attempt invalid, trying alt domain:', altBaseUrl);
-  const second = await fetchUserDataOnce(uid, altBaseUrl);
-
-  if (isValidLuoguPayload(second.data)) {
-    console.log('[fetchUserDataSmart] second attempt succeeded on', second.baseUrl);
-    return { data: second.data, trace: [first.meta, second.meta] };
+  if (data && typeof data === 'object') {
+    if ('code' in data && typeof data.code === 'number') {
+      meta.code = data.code;
+    }
+    if (data?.currentData?.errorType) meta.errorType = data.currentData.errorType;
+    if (data?.currentData?.errorMessage) meta.errorMessage = data.currentData.errorMessage;
   }
 
-  console.error('[fetchUserDataSmart] both attempts invalid');
-  return { data: null, trace: [first.meta, second.meta] };
+  console.log(`[${reqId}] [contentOnly] valid=`, isValidLuoguPayload(data), 'code=', (data && data.code), 'errorType=', data?.currentData?.errorType);
+  return { data, meta };
+}
+
+function tryExtractInjectionFromHtml(html: string, reqId: string): any | null {
+  // 常见：window._feInjection = JSON.parse(decodeURIComponent("..."))
+  // 1) 先尝试 JSON.parse(decodeURIComponent("..."))
+  const re1 = /JSON\.parse\(decodeURIComponent\((['"])(.*?)\1\)\)/s;
+  const m1 = html.match(re1);
+  if (m1 && m1[2]) {
+    try {
+      const decoded = decodeURIComponent(m1[2]);
+      console.log(`[${reqId}] [html] decodeURIComponent payload length:`, decoded.length);
+      const data = JSON.parse(decoded);
+      if (isValidLuoguPayload(data)) {
+        console.log(`[${reqId}] [html] extracted via decodeURIComponent(JSON)`);
+        return data;
+      }
+    } catch (e) {
+      console.warn(`[${reqId}] [html] decode/parse failed:`, (e as Error).message);
+    }
+  }
+
+  // 2) 兜底：window._feInjection = {...};
+  const re2 = /window\._feInjection\s*=\s*(\{[\s\S]*?\})\s*;?/;
+  const m2 = html.match(re2);
+  if (m2 && m2[1]) {
+    const raw = m2[1];
+    console.log(`[${reqId}] [html] raw _feInjection snippet:`, snippet(raw, 300));
+    try {
+      const data = JSON.parse(raw);
+      if (isValidLuoguPayload(data)) {
+        console.log(`[${reqId}] [html] extracted via window._feInjection JSON`);
+        return data;
+      }
+    } catch (e) {
+      console.warn(`[${reqId}] [html] JSON parse _feInjection failed:`, (e as Error).message);
+    }
+  }
+
+  console.log(`[${reqId}] [html] no recognizable injection found`);
+  return null;
+}
+
+async function fetchFromHtml(baseUrl: string, uid: string, reqId: string): Promise<{ data: any | null; meta: AttemptMeta }> {
+  const clientId = randHex(16);
+  const url = `${baseUrl.replace(/\/+$/, '')}/user/${encodeURIComponent(uid)}`;
+  const headers = createLuoguHeaders(baseUrl, uid, 'html', clientId);
+  console.log(`[${reqId}] [html] using cookie:`, headers['Cookie']);
+
+  const { res, preview, contentType } = await doFetch(url, { method: 'GET', headers }, reqId);
+  const html = await res.clone().text().catch(() => '');
+  const data = tryExtractInjectionFromHtml(html, reqId);
+
+  const meta: AttemptMeta = {
+    type: 'html',
+    url,
+    status: res.status,
+    ok: res.ok,
+    redirected: res.redirected,
+    contentType,
+    bodyPreview: preview,
+    domain: new URL(baseUrl).host,
+    note: data ? 'extracted from HTML' : 'failed to extract from HTML',
+  };
+
+  console.log(`[${reqId}] [html] valid=`, isValidLuoguPayload(data));
+  return { data, meta };
+}
+
+type DomainPolicy = 'cn' | 'com' | 'auto';
+
+function pickDomains(policy: DomainPolicy): string[] {
+  if (policy === 'cn') return ['https://www.luogu.com.cn'];
+  if (policy === 'com') return ['https://www.luogu.com'];
+  return ['https://www.luogu.com', 'https://www.luogu.com.cn'];
+}
+
+async function fetchUserDataFlow(uid: string, policy: DomainPolicy, reqId: string) {
+  const domains = pickDomains(policy);
+  const trace: AttemptMeta[] = [];
+
+  for (const baseUrl of domains) {
+    console.log(`[${reqId}] trying domain: ${baseUrl}`);
+
+    // 1) content-only JSON
+    const a1 = await fetchContentOnly(baseUrl, uid, reqId);
+    trace.push(a1.meta);
+    if (isValidLuoguPayload(a1.data)) {
+      console.log(`[${reqId}] success on content-only: ${baseUrl}`);
+      return { data: a1.data, trace };
+    }
+
+    // 如果 content-only 返回 418 或结构不对，尝试 2) HTML 解析
+    const a2 = await fetchFromHtml(baseUrl, uid, reqId);
+    trace.push(a2.meta);
+    if (isValidLuoguPayload(a2.data)) {
+      console.log(`[${reqId}] success on HTML fallback: ${baseUrl}`);
+      return { data: a2.data, trace };
+    }
+
+    console.warn(`[${reqId}] both content-only and HTML failed on domain: ${baseUrl}`);
+  }
+
+  console.error(`[${reqId}] all domains exhausted`);
+  return { data: null as any, trace };
 }
 
 export default {
   async fetch(request: Request): Promise<Response> {
-    const reqId = crypto.randomUUID();
+    const reqId = (crypto as any).randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
     const url = new URL(request.url);
     const method = request.method.toUpperCase();
-    const uid = (url.searchParams.get('uid') || '').trim();
-    const cnParam = url.searchParams.get('cn');
+    const ip = request.headers.get('cf-connecting-ip') || 'unknown-ip';
 
-    console.log(`[req ${reqId}] ${method} ${url.pathname}${url.search} from ${request.headers.get('cf-connecting-ip') || 'unknown-ip'}`);
+    console.log(`[req ${reqId}] ${method} ${url.pathname}${url.search} from ${ip}`);
 
     // CORS 预检
     if (method === 'OPTIONS') {
@@ -293,52 +415,66 @@ export default {
       return textResponse('ok');
     }
 
+    const uid = (url.searchParams.get('uid') || '').trim();
     if (!uid) {
       console.log(`[req ${reqId}] missing uid`);
-      return jsonResponse({
-        error: 'Missing uid',
-        hint: 'Use /?uid=371511&cn=true',
-      }, 400);
+      return jsonResponse({ error: 'Missing uid', hint: 'Use /?uid=371511 or /?uid=371511&cn=true|false' }, 400);
     }
 
-    // 与原 worker.py 一致的优先域：默认 .com；cn=true 时优先 .cn
-    const preferredBaseUrl = cnParam === 'true' ? 'https://www.luogu.com.cn' : 'https://www.luogu.com';
-    console.log(`[req ${reqId}] uid=${uid} preferredBaseUrl=${preferredBaseUrl} (cn=${cnParam})`);
+    // 参数策略：
+    // cn=true -> 只用 .cn；cn=false -> 只用 .com；缺省 -> 自动 (.com -> .cn)
+    const cnParam = (url.searchParams.get('cn') || '').toLowerCase();
+    const policy: DomainPolicy =
+      cnParam === 'true'
+        ? 'cn'
+        : cnParam === 'false'
+        ? 'com'
+        : 'auto';
+
+    console.log(`[req ${reqId}] uid=${uid} policy=${policy} (raw cn=${cnParam || 'unset'})`);
 
     try {
-      const startedAll = Date.now();
-      const { data, trace } = await fetchUserDataSmart(uid, preferredBaseUrl);
+      const t0 = Date.now();
+      const { data, trace } = await fetchUserDataFlow(uid, policy, reqId);
 
-      // 输出调试 trace
+      // 打印所有尝试的元数据
       for (const [i, m] of trace.entries()) {
-        console.log(`[req ${reqId}] attempt ${i + 1}:`, m);
+        console.log(`[req ${reqId}] attempt ${i + 1}:`, {
+          type: m.type,
+          url: m.url,
+          status: m.status,
+          ok: m.ok,
+          redirected: m.redirected,
+          contentType: m.contentType,
+          code: m.code,
+          errorType: m.errorType,
+          errorMessage: m.errorMessage,
+          note: m.note,
+        });
       }
 
       if (!data) {
         const resp = {
           error: 'Upstream did not return expected data',
-          message: 'Both domains failed or returned unexpected structure.',
+          message: 'All attempts failed or returned unexpected structure.',
           trace,
         };
-        console.error(`[req ${reqId}] failed after ${Date.now() - startedAll} ms`);
+        console.error(`[req ${reqId}] failed in ${Date.now() - t0} ms`);
         return jsonResponse(resp, 502);
       }
 
       const result = buildUserResult(data, uid);
-      console.log(`[req ${reqId}] success in ${Date.now() - startedAll} ms,`
-        + ` has name=${Boolean(result.info.name)},`
-        + ` avatar=${Boolean(result.info.avatar)},`
-        + ` elo=${result.elo},`
-        + ` passedCount=${result.passedProblem?.count ?? 0},`
-        + ` submittedCount=${result.submittedProblem?.count ?? 0}`);
+      console.log(
+        `[req ${reqId}] success in ${Date.now() - t0} ms,` +
+          ` name=${String(result.info.name)},` +
+          ` passed=${result.passedProblem?.count ?? 0},` +
+          ` submitted=${result.submittedProblem?.count ?? 0}`,
+      );
 
       return jsonResponse(result);
     } catch (err) {
       console.error(`[req ${reqId}] exception:`, (err as Error).message);
-      return jsonResponse(
-        { error: 'Internal error', detail: (err as Error).message },
-        500,
-      );
+      return jsonResponse({ error: 'Internal error', detail: (err as Error).message }, 500);
     }
   },
 };
