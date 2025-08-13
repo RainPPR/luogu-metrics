@@ -24,12 +24,8 @@ def fetch_problem(problem_list):
         'count': len(problem_list)
     }
 
-def fetch_user_data(uid):
-    if os.path.exists(f'web/{uid}'):
-        data = common.load_json(f'web/{uid}')
-    else:
-        data = common.fetch_json(f'https://www.luogu.com.cn/user/{uid}?_contentOnly=1')
-    
+def fetch_user_data(uid, base_url = 'https://www.luogu.com.cn'):
+    data = common.fetch_json(f'{base_url}/user/{uid}?_contentOnly=1')
     user = data['currentData']['user'].copy()
 
     del_list = [
