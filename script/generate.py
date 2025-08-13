@@ -1,17 +1,5 @@
-# import json
-from js import fetch
-from copy import deepcopy
-
-async def fetch_json(url: str):
-    response = await fetch(url, {
-        "method": "GET",
-        "headers": {
-            'User-Agent': 'Mozilla/5.0',
-            "Content-Type": "application/json"
-        }
-    })
-    
-    return response.json()
+import os
+import common
 
 def fetch_problem(problem_list):
     type_list = ['ALL', 'P', 'B', 'CF', 'SP', 'AT', 'UVA']
@@ -36,9 +24,10 @@ def fetch_problem(problem_list):
         'count': len(problem_list)
     }
 
-async def fetch_user_data(uid, base_url = 'https://www.luogu.com.cn'):
-    data = await fetch_json(f'{base_url}/user/{uid}?_contentOnly=1')
-    user = deepcopy(data['currentData']['user'])
+
+def fetch_user_data(uid, base_url = 'https://www.luogu.com.cn'):
+    data = common.fetch_json(f'{base_url}/user/{uid}?_contentOnly=1')
+    user = data['currentData']['user'].copy()
 
     del_list = [
         'passedProblemCount', 'submittedProblemCount',
