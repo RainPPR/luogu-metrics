@@ -1,5 +1,6 @@
 # import json
 from js import fetch
+from copy import deepcopy
 
 async def fetch_json(url: str):
     response = await fetch(url, {
@@ -37,7 +38,7 @@ def fetch_problem(problem_list):
 
 async def fetch_user_data(uid, base_url = 'https://www.luogu.com.cn'):
     data = await fetch_json(f'{base_url}/user/{uid}?_contentOnly=1')
-    user = data['currentData']['user'].copy()
+    user = deepcopy(data['currentData']['user'])
 
     del_list = [
         'passedProblemCount', 'submittedProblemCount',

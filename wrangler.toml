@@ -2,3 +2,6 @@ name = "luogu-metrics"
 main = "script/worker.py"
 compatibility_flags = ["python_workers"]
 compatibility_date = "2025-08-13"
+
+[observability]
+enabled = true
