@@ -13,7 +13,7 @@ async def on_fetch(request):
         base_url = 'https://www.luogu.com'
         if 'cn' in params and params['cn'][0] == 'true':
             base_url = 'https://www.luogu.com.cn'
-        data = fetch_user_data(uid, base_url = base_url)
+        data = await fetch_user_data(uid, base_url = base_url)
         console.log(f'Data for user {uid} fetched successfully.')
         return Response(data)
 
