@@ -207,7 +207,7 @@ function createLuoguHeaders(baseUrl: string, uid: string, kind: 'json' | 'html',
     // 某些平台禁止覆盖 UA；尽量设置，但即使被忽略也无碍。
     'User-Agent':
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      '(KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
     // 很多情况下 __client_id 必须存在，否则返回 418
     'Cookie': `__client_id=${clientId};`,
     // 这些头可以帮助模拟浏览器环境
@@ -330,7 +330,7 @@ function tryExtractInjectionFromHtml(html: string, reqId: string): any | null {
 
 async function fetchFromHtml(baseUrl: string, uid: string, reqId: string): Promise<{ data: any | null; meta: AttemptMeta }> {
   const clientId = randHex(16);
-  const url = `${baseUrl.replace(/\/+$/, '')}/user/${encodeURIComponent(uid)}`;
+  const url = `${baseUrl.replace(/\/+$/, '')}/user/${encodeURIComponent(uid)}?_contentOnly=1`;
   const headers = createLuoguHeaders(baseUrl, uid, 'html', clientId);
   console.log(`[${reqId}] [html] using cookie:`, headers['Cookie']);
 
@@ -418,7 +418,7 @@ export default {
     const uid = (url.searchParams.get('uid') || '').trim();
     if (!uid) {
       console.log(`[req ${reqId}] missing uid`);
-      return jsonResponse({ error: 'Missing uid', hint: 'Use /?uid=371511 or /?uid=371511&cn=true|false' }, 400);
+      return jsonResponse({ error: 'Missing uid', hint: 'Use /?uid=1 or /?uid=1&cn=true|false' }, 400);
     }
 
     // 参数策略：
